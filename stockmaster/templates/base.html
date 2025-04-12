@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="shopify-api-key" content="e3fd3563c31f59390082d15ed2859222">
+    <title>{% block title %}StockMaster - Shopify Inventory Management{% endblock %}</title>
+    
+    <!-- Tailwind CSS -->
+    <link rel="stylesheet" href="{{ STATIC_URL }}css/styles.css">
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <!-- Shopify App Bridge -->
+    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+    <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
+    <script src="https://unpkg.com/@shopify/app-bridge/actions@3"></script>
+    
+    <!-- Custom CSS -->
+    {% block extra_css %}{% endblock %}
+    
+    <!-- App Bridge Config -->
+    <script>
+        // Debug flag - set to true to enable detailed logging
+        // Using window property to ensure it's globally accessible
+        window.DEBUG = true;
+        
+        // Global variables for app state
+        window.appBridgeRedirect = null;
+        window.jwtToken = null;
+        window.currentPage = window.location.pathname;
+        
+        // Initialize token from URL or sessionStorage
+        function initializeToken() {
+            // Try to get token from URL parameters (highest priority)
+            const urlParams = new URLSearchParams(window.location.search);
+            const idTokenParam = urlParams.get('id_token');
+            
+            if (idTokenParam) {
+                // Store token in sessionStorage for future requests
+                sessionStorage.setItem('shopify_jwt_token', idTokenParam);
+                window.jwtToken = idTokenParam;
+                console.log("JWT token from URL parameters stored in session storage");
+                return true;
+            }
+            
+            // Try to get token from sessionStorage if not in URL
+            const storedToken = sessionStorage.getItem('shopify_jwt_token');
+            if (storedToken) {
+                window.jwtToken = storedToken;
+                console.log("JWT token retrieved from session storage");
+                return true;
+            }
+            
+            console.log("No JWT token found in URL or session storage");
+            return false;
+        }
+        
+        // AJAX content loader with authentication
+        function loadContent(path, pushState = true) {
+            if (window.DEBUG) console.log("Loading content via AJAX:", path);
+            
+            // Make sure we have the latest token
+            initializeToken();
+            
+            // Show loading indicator - IMPORTANT: Use ID for precise targeting
+            const mainContent = document.getElementById('content-container');
+            if (!mainContent) {
+                console.error("Content container not found! Make sure element with ID 'content-container' exists");
+                return;
+            }
+            
+            if (window.DEBUG) console.log("Found content container, showing loading indicator");
+            // Clear existing content and show loader
+            mainContent.innerHTML = '<div class="flex justify-center"><div class="loader">Loading...</div></div>';
+            
+            // Prepare URL with Shopify parameters
+            const currentParams = new URLSearchParams(window.location.search);
+            const shopParam = currentParams.get('shop');
+            const hostParam = currentParams.get('host') || sessionStorage.getItem('hostParam');
+            const embeddedParam = currentParams.get('embedded');
+            
+            // Build the URL with appropriate parameters for AJAX
+            let targetUrl = path;
+            if (!targetUrl.startsWith('/')) {
+                targetUrl = '/' + targetUrl;
+            }
+            
+            // Add ajax=1 parameter to signal this is an AJAX request
+            const urlObj = new URL(targetUrl, window.location.origin);
+            const targetParams = new URLSearchParams(urlObj.search);
+            targetParams.set('ajax', '1');
+            
+            // Add shop and host parameters that are needed for Shopify embedding
+            if (shopParam) targetParams.set('shop', shopParam);
+            if (hostParam) targetParams.set('host', hostParam);
+            if (embeddedParam) targetParams.set('embedded', embeddedParam);
+            
+            // Set the search parameters
+            urlObj.search = targetParams.toString();
+            
+            // Set up authentication headers
+            const headers = {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'text/html',
+            };
+            
+            // Add Authorization header with Bearer token if available
+            if (window.jwtToken) {
+                headers['Authorization'] = `Bearer ${window.jwtToken}`;
+            }
+            
+            if (window.DEBUG) console.log("Sending AJAX request to:", urlObj.toString());
+            
+            // Fetch the content with authentication
+            fetch(urlObj.toString(), {
+                method: 'GET',
+                headers: headers,
+                credentials: 'same-origin'
+            })
+            .then(response => {
+                if (!response.ok) {
+                    // Specific handling for authentication errors
+                    if (response.status === 401 || response.status === 403) {
+                        // Clear token as it might be invalid
+                        sessionStorage.removeItem('shopify_jwt_token');
+                        window.jwtToken = null;
+                        throw new Error('Authentication required. Please refresh the page to re-authenticate.');
+                    }
+                    throw new Error(`Network response was not ok: ${response.status}`);
+                }
+                
+                // Check if this is an AJAX response
+                const isAjaxResponse = response.headers.get('X-AJAX-Response') === '1';
+                if (window.DEBUG) console.log("Received response, isAjaxResponse header:", isAjaxResponse);
+                
+                return response.text().then(text => {
+                    return {
+                        text: text,
+                        isAjaxResponse: isAjaxResponse
+                    };
+                });
+            })
+            .then(data => {
+                const html = data.text;
+                const isAjaxResponse = data.isAjaxResponse;
+                
+                if (window.DEBUG) console.log(`Received HTML content (${html.length} bytes)`);
+                
+                // Update the main content - IMPORTANT: Replace, don't append
+                if (mainContent) {
+                    // FIRST completely clear the content to avoid duplicates
+                    mainContent.innerHTML = '';
+                    if (window.DEBUG) console.log("Cleared existing content");
+                    
+                    // THEN add the new content
+                    mainContent.innerHTML = html;
+                    if (window.DEBUG) console.log("Added new content to container");
+                    
+                    // Execute any scripts in the returned content
+                    const scripts = mainContent.querySelectorAll('script');
+                    if (window.DEBUG) console.log(`Processing ${scripts.length} scripts`);
+                    scripts.forEach((script, index) => {
+                        if (window.DEBUG) console.log(`Processing script ${index + 1}/${scripts.length}`);
+                        const newScript = document.createElement('script');
+                        Array.from(script.attributes).forEach(attr => {
+                            newScript.setAttribute(attr.name, attr.value);
+                        });
+                        newScript.appendChild(document.createTextNode(script.innerHTML));
+                        script.parentNode.replaceChild(newScript, script);
+                    });
+                }
+                
+                // Update URL in browser history if needed
+                if (pushState) {
+                    const historyUrl = new URL(targetUrl, window.location.origin);
+                    
+                    // Add required parameters to the history URL
+                    if (shopParam) historyUrl.searchParams.set('shop', shopParam);
+                    if (hostParam) historyUrl.searchParams.set('host', hostParam);
+                    if (embeddedParam) historyUrl.searchParams.set('embedded', embeddedParam);
+                    
+                    history.pushState({ path: targetUrl }, '', historyUrl.toString());
+                    window.currentPage = targetUrl;
+                    if (window.DEBUG) console.log("Updated browser history");
+                }
+                
+                // Update active state in sidebar
+                updateActiveSidebarItem(targetUrl);
+                
+                // Call initialize event handlers again to ensure proper binding
+                if (typeof initializeEventHandlers === 'function') {
+                    setTimeout(initializeEventHandlers, 100);
+                }
+                
+                if (window.DEBUG) console.log("Content loaded successfully via AJAX");
+            })
+            .catch(error => {
+                console.error('Error loading content:', error);
+                if (mainContent) {
+                    mainContent.innerHTML = `<div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+                        <p>Error loading content. Please try again or refresh the page.</p>
+                        <p class="text-sm">${error.message}</p>
+                        <div class="mt-3">
+                            <button onclick="window.location.reload()" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+                                Refresh Page
+                            </button>
+                        </div>
+                    </div>`;
+                }
+            });
+        }
+        
+        // Make a general-purpose API wrapper for all fetch requests
+        // This ensures authentication is consistent across all API calls
+        window.authenticatedFetch = async function(url, options = {}) {
+            // Make sure we have the latest token
+            initializeToken();
+            
+            // Ensure options has headers object
+            options.headers = options.headers || {};
+            
+            // Add Authorization header with Bearer token if available
+            if (window.jwtToken) {
+                options.headers['Authorization'] = `Bearer ${window.jwtToken}`;
+            }
+            
+            // Add shop and host parameters if not already in URL
+            if (!url.includes('?')) {
+                const currentParams = new URLSearchParams(window.location.search);
+                const shopParam = currentParams.get('shop');
+                const hostParam = currentParams.get('host') || sessionStorage.getItem('hostParam');
+                
+                if (shopParam || hostParam) {
+                    const urlObj = new URL(url, window.location.origin);
+                    if (shopParam) urlObj.searchParams.set('shop', shopParam);
+                    if (hostParam) urlObj.searchParams.set('host', hostParam);
+                    url = urlObj.toString();
+                }
+            }
+            
+            // Always include credentials
+            options.credentials = 'same-origin';
+            
+            // Make the fetch request
+            try {
+                const response = await fetch(url, options);
+                
+                if (!response.ok) {
+                    // Handle authentication errors
+                    if (response.status === 401 || response.status === 403) {
+                        // Clear token as it might be invalid
+                        sessionStorage.removeItem('shopify_jwt_token');
+                        window.jwtToken = null;
+                        console.error('Authentication required. Please refresh the page to re-authenticate.');
+                    }
+                    throw new Error(`API request failed with status: ${response.status}`);
+                }
+                
+                // Try to parse as JSON
+                try {
+                    return await response.json();
+                } catch (e) {
+                    // Not JSON, return text
+                    return await response.text();
+                }
+            } catch (error) {
+                console.error('API request error:', error);
+                throw error;
+            }
+        };
+        
+        // Safe JSON parsing with error handling
+        function safeJSONParse(text) {
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                console.error("Failed to parse JSON:", e);
+                return null;
+            }
+        }
+        
+        // Update active item in sidebar based on current path
+        function updateActiveSidebarItem(path) {
+            // Simplify path for matching
+            const simplePath = path.split('?')[0];
+            
+            // Find all sidebar links
+            const sidebarLinks = document.querySelectorAll('.sidebar-nav-link');
+            
+            // Remove active class from all
+            sidebarLinks.forEach(link => {
+                const linkPath = link.getAttribute('data-path');
+                
+                // Check if this link matches the current path
+                if (linkPath && simplePath.includes(linkPath)) {
+                    // Add active class
+                    link.classList.add('bg-indigo-50', 'text-indigo-700');
+                    link.classList.remove('text-gray-600', 'hover:bg-gray-50', 'hover:text-gray-900');
+                    
+                    // Update icon color
+                    const icon = link.querySelector('i');
+                    if (icon) {
+                        icon.classList.add('text-indigo-500');
+                        icon.classList.remove('text-gray-400', 'group-hover:text-gray-500');
+                    }
+                } else {
+                    // Remove active class
+                    link.classList.remove('bg-indigo-50', 'text-indigo-700');
+                    link.classList.add('text-gray-600', 'hover:bg-gray-50', 'hover:text-gray-900');
+                    
+                    // Update icon color
+                    const icon = link.querySelector('i');
+                    if (icon) {
+                        icon.classList.remove('text-indigo-500');
+                        icon.classList.add('text-gray-400', 'group-hover:text-gray-500');
+                    }
+                }
+            });
+        }
+        
+        // Define a navigation function for both internal and App Bridge navigation
+        window.appRedirect = function(path, useAjax = true) {
+            // Determine if we should use AJAX or a full redirect
+            if (useAjax) {
+                // Use AJAX for internal navigation
+                loadContent(path);
+                return;
+            }
+            
+            // For non-AJAX navigation, use App Bridge if available
+            if (window.shopifyApp && window.appBridgeRedirect) {
+                try {
+                    // Make sure path starts with / if it's a relative path
+                    if (!path.startsWith('/') && !path.startsWith('http')) {
+                        path = '/' + path;
+                    }
+                    console.log("Using App Bridge redirect to", path);
+                    window.appBridgeRedirect.dispatch(window.appBridgeRedirect.Action.APP, path);
+                    return;
+                } catch (e) {
+                    console.error("App Bridge redirect failed, falling back to simple redirect:", e);
+                    // Fall through to the fallback
+                }
+            }
+            
+            // Fallback redirect that preserves Shopify parameters
+            try {
+                // Preserve Shopify context parameters
+                const currentParams = new URLSearchParams(window.location.search);
+                const shopParam = currentParams.get('shop');
+                const hostParam = currentParams.get('host') || sessionStorage.getItem('hostParam');
+                
+                // Construct target URL
+                let targetUrl = path;
+                
+                // Make sure path starts with / if it's a relative path
+                if (!path.startsWith('/') && !path.startsWith('http')) {
+                    targetUrl = '/' + path;
+                }
+                
+                // Add Shopify parameters
+                const urlObj = new URL(targetUrl, window.location.origin);
+                const targetParams = new URLSearchParams(urlObj.search);
+                
+                if (shopParam) targetParams.set('shop', shopParam);
+                if (hostParam) targetParams.set('host', hostParam);
+                
+                // Set the new search parameters
+                urlObj.search = targetParams.toString();
+                
+                console.log("Redirecting to:", urlObj.toString());
+                window.location.href = urlObj.toString();
+            } catch (e) {
+                console.error("Error in fallback redirect:", e);
+                // Last resort fallback
+                window.location.href = path;
+            }
+        };
+        
+        // Function to initialize App Bridge
+        async function initializeAppBridge() {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                const host = urlParams.get('host');
+                const shop = urlParams.get('shop') || "{{ request.session.shop|escapejs }}";
+                
+                // Store host parameter in session storage for future redirects
+                if (host) {
+                    sessionStorage.setItem('hostParam', host);
+                }
+                
+                // Initialize JWT token
+                initializeToken();
+                
+                // Use the updated Client ID directly to ensure it's available
+                const apiKey = "e3fd3563c31f59390082d15ed2859222";
+                
+                console.log("Initializing App Bridge with:", {
+                    apiKey: apiKey,
+                    host: host,
+                    shop: shop
+                });
+                
+                // Create App Bridge config with debug mode
+                const config = {
+                    apiKey: apiKey,
+                    host: host,
+                    forceRedirect: true
+                };
+                
+                // Ensure the App Bridge object is available
+                if (typeof window['app-bridge'] === 'undefined' && typeof window.AppBridge === 'undefined') {
+                    // Dynamic loading fallback
+                    console.log("App Bridge not found, loading dynamically");
+                    await new Promise((resolve, reject) => {
+                        const script = document.createElement('script');
+                        script.src = "https://unpkg.com/@shopify/app-bridge@3";
+                        script.async = true;
+                        script.onload = resolve;
+                        script.onerror = reject;
+                        document.head.appendChild(script);
+                    });
+                    console.log("App Bridge script loaded dynamically");
+                }
+                
+                let app = null;
+                
+                // Only initialize if we have the minimum required parameters
+                if (apiKey && (host || shop)) {
+                    try {
+                        // Use the global object with proper error handling
+                        if (typeof window.AppBridge !== 'undefined') {
+                            app = window.AppBridge.createApp(config);
+                            console.log("Using window.AppBridge");
+                        } else if (typeof window['app-bridge'] !== 'undefined') {
+                            app = window['app-bridge'].createApp(config);
+                            console.log("Using window['app-bridge']");
+                        } else if (typeof window.shopify !== 'undefined' && window.shopify.createApp) {
+                            app = window.shopify.createApp(config);
+                            console.log("Using window.shopify.createApp");
+                        } else {
+                            console.error("App Bridge not found in global scope even after loading attempt");
+                            // Continue execution, the fallback redirect will be used
+                        }
+                        
+                        if (app) {
+                            // Save app for later use
+                            window.shopifyApp = app;
+                            
+                            // Setup Redirect action
+                            let actions = null;
+                            
+                            // Try multiple ways to get actions
+                            if (window.AppBridge && window.AppBridge.actions) {
+                                actions = window.AppBridge.actions;
+                                console.log("Using window.AppBridge.actions");
+                            } else if (window['app-bridge'] && window['app-bridge'].actions) {
+                                actions = window['app-bridge'].actions;
+                                console.log("Using window['app-bridge'].actions");
+                            } else if (typeof window.shopify !== 'undefined' && window.shopify.actions) {
+                                actions = window.shopify.actions;
+                                console.log("Using window.shopify.actions");
+                            } else if (typeof AppBridgeActions !== 'undefined') {
+                                actions = AppBridgeActions;
+                                console.log("Using global AppBridgeActions");
+                            } else {
+                                console.warn("Could not find App Bridge actions, trying to load dynamically");
+                                // Try to load actions dynamically if needed
+                            }
+                            
+                            if (actions) {
+                                // Create redirect action
+                                window.appBridgeRedirect = actions.Redirect.create(app);
+                                console.log("App Bridge successfully initialized with Redirect action");
+                                
+                                // Try to get the session token if available
+                                try {
+                                    // Check if Session action is available before trying to use it
+                                    if (actions.Session) {
+                                        const sessionToken = await actions.Session.getToken(app);
+                                        if (sessionToken) {
+                                            window.jwtToken = sessionToken;
+                                            sessionStorage.setItem('shopify_jwt_token', sessionToken);
+                                            console.log("Successfully obtained session token from App Bridge");
+                                        } else {
+                                            console.warn("Session token is null or empty");
+                                        }
+                                    } else {
+                                        console.warn("Session action is not available in App Bridge");
+                                        // Use the id_token from URL instead, which we already initialized
+                                        console.log("Using id_token from URL instead of Session token");
+                                    }
+                                } catch (tokenError) {
+                                    console.warn("Could not get session token:", tokenError);
+                                    // Continue with the id_token we already have from the URL
+                                }
+                            } else {
+                                console.error("App Bridge actions not available");
+                            }
+                        }
+                    } catch (error) {
+                        console.error("Error initializing App Bridge:", error);
+                    }
+                } else {
+                    console.warn("Missing parameters for App Bridge initialization. Using fallback navigation.");
+                }
+            } catch (error) {
+                console.error("Error setting up App Bridge:", error);
+            }
+        }
+
+        // Initialize App Bridge as soon as possible
+        initializeAppBridge();
+        
+        // Handle back/forward browser navigation
+        window.addEventListener('popstate', function(event) {
+            if (event.state && event.state.path) {
+                loadContent(event.state.path, false);
+            }
+        });
+        
+        // Initialize after DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize JWT token from URL or storage
+            initializeToken();
+            
+            // Store host parameter from URL in session storage for future use
+            const urlParams = new URLSearchParams(window.location.search);
+            const hostParam = urlParams.get('host');
+            if (hostParam) {
+                sessionStorage.setItem('hostParam', hostParam);
+            }
+            
+            // Initial page setup
+            const initialPath = window.location.pathname;
+            // Store initial state in history
+            history.replaceState({ path: initialPath }, '', window.location.href);
+            
+            // Update sidebar active state
+            updateActiveSidebarItem(initialPath);
+            
+            // Set up event listeners for sidebar links
+            document.querySelectorAll('.sidebar-nav-link').forEach(function(link) {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const path = this.getAttribute('data-path-url');
+                    if (path) {
+                        loadContent(path);
+                    }
+                });
+            });
+        });
+    </script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {# This template now assumes user is authenticated #}
+    <div class="flex h-screen bg-gray-100">
+        <!-- Sidebar -->
+        <div class="hidden md:flex md:flex-shrink-0">
+            <div class="flex flex-col w-64 border-r border-gray-200 bg-white">
+                <div class="flex flex-col flex-grow pt-5 pb-4 overflow-y-auto">
+                    <div class="flex items-center flex-shrink-0 px-4">
+                        <span class="text-xl font-bold text-gray-800">StockMaster</span>
+                    </div>
+                    <div class="mt-5 flex-grow flex flex-col">
+                        <nav class="flex-1 px-2 space-y-1">
+                            <a href="#" 
+                               data-path="dashboard"
+                               data-path-url="{% url 'dashboard:index' %}"
+                               class="sidebar-nav-link {% if request.resolver_match.url_name == 'index' and request.resolver_match.namespace == 'dashboard' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %} group flex items-center px-2 py-2 text-sm font-medium rounded-md cursor-pointer">
+                                <i class="fas fa-home mr-3 flex-shrink-0 h-5 w-5 {% if request.resolver_match.url_name == 'index' and request.resolver_match.namespace == 'dashboard' %}text-indigo-500{% else %}text-gray-400 group-hover:text-gray-500{% endif %}"></i>
+                                Dashboard
+                            </a>
+                            
+                            <a href="#" 
+                               data-path="inventory"
+                               data-path-url="{% url 'inventory:index' %}"
+                               class="sidebar-nav-link {% if request.resolver_match.namespace == 'inventory' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %} group flex items-center px-2 py-2 text-sm font-medium rounded-md cursor-pointer">
+                                <i class="fas fa-boxes-stacked mr-3 flex-shrink-0 h-5 w-5 {% if request.resolver_match.namespace == 'inventory' %}text-indigo-500{% else %}text-gray-400 group-hover:text-gray-500{% endif %}"></i>
+                                Inventory
+                            </a>
+                            
+                            <a href="#" 
+                               data-path="rules"
+                               data-path-url="{% url 'rules:index' %}"
+                               class="sidebar-nav-link {% if request.resolver_match.namespace == 'rules' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %} group flex items-center px-2 py-2 text-sm font-medium rounded-md cursor-pointer">
+                                <i class="fas fa-list-check mr-3 flex-shrink-0 h-5 w-5 {% if request.resolver_match.namespace == 'rules' %}text-indigo-500{% else %}text-gray-400 group-hover:text-gray-500{% endif %}"></i>
+                                Rules
+                            </a>
+                            
+                            <a href="#" 
+                               data-path="notifications"
+                               data-path-url="{% url 'notifications:index' %}"
+                               class="sidebar-nav-link {% if request.resolver_match.namespace == 'notifications' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %} group flex items-center px-2 py-2 text-sm font-medium rounded-md cursor-pointer">
+                                <i class="fas fa-bell mr-3 flex-shrink-0 h-5 w-5 {% if request.resolver_match.namespace == 'notifications' %}text-indigo-500{% else %}text-gray-400 group-hover:text-gray-500{% endif %}"></i>
+                                Notifications
+                            </a>
+                            
+                            <a href="#" 
+                               data-path="analytics"
+                               data-path-url="{% url 'analytics:index' %}"
+                               class="sidebar-nav-link {% if request.resolver_match.namespace == 'analytics' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %} group flex items-center px-2 py-2 text-sm font-medium rounded-md cursor-pointer">
+                                <i class="fas fa-chart-line mr-3 flex-shrink-0 h-5 w-5 {% if request.resolver_match.namespace == 'analytics' %}text-indigo-500{% else %}text-gray-400 group-hover:text-gray-500{% endif %}"></i>
+                                Analytics
+                            </a>
+                        </nav>
+                    </div>
+                    <div class="flex-shrink-0 flex border-t border-gray-200 p-4">
+                        <a href="{% url 'accounts:logout' %}" class="flex-shrink-0 group block" onclick="return confirm('Are you sure you want to log out?');">
+                            <div class="flex items-center">
+                                <div>
+                                    <i class="fas fa-sign-out-alt text-gray-400 group-hover:text-gray-500"></i>
+                                </div>
+                                <div class="ml-3">
+                                    <p class="text-sm font-medium text-gray-700 group-hover:text-gray-900">Logout</p>
+                                </div>
+                            </div>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Main content area -->
+        <div class="flex flex-col flex-1 overflow-hidden">
+            <!-- Top navigation for mobile -->
+            <div class="md:hidden pl-1 pt-1 sm:pl-3 sm:pt-3">
+                <button type="button" class="-ml-0.5 -mt-0.5 h-12 w-12 inline-flex items-center justify-center rounded-md text-gray-500 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500" id="mobile-menu-button">
+                    <span class="sr-only">Open sidebar</span>
+                    <i class="fas fa-bars h-6 w-6"></i>
+                </button>
+            </div>
+            
+            <main class="flex-1 relative overflow-y-auto focus:outline-none">
+                <div id="content-container" class="py-6">
+                    {% block content %}{% endblock %}
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Custom JS -->
+    {% block extra_js %}{% endblock %}
+    
+    <!-- CSS for loader -->
+    <style>
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #3498db;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    
+    <!-- Fix sidebar links -->
+    <script>
+        // Keep track of whether we've initialized event handlers
+        window.eventHandlersInitialized = false;
+        
+        // Set up event listeners for navigation links when the DOM is ready
+        function initializeEventHandlers() {
+            // Skip if already initialized
+            if (window.eventHandlersInitialized) {
+                if (window.DEBUG) console.log("Event handlers already initialized, skipping");
+                return;
+            }
+            
+            if (window.DEBUG) console.log("Initializing navigation event handlers");
+            
+            // Remove any existing click handlers by cloning and replacing
+            document.querySelectorAll('.sidebar-nav-link').forEach(function(link) {
+                const newLink = link.cloneNode(true);
+                link.parentNode.replaceChild(newLink, link);
+                
+                newLink.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation(); // Prevent event bubbling
+                    
+                    const path = this.getAttribute('data-path-url');
+                    if (path) {
+                        if (window.DEBUG) console.log("Navigation clicked:", path);
+                        appRedirect(path, true); // true = use AJAX
+                    }
+                });
+            });
+            
+            // Mobile menu toggle
+            const mobileMenuButton = document.getElementById('mobile-menu-button');
+            if (mobileMenuButton) {
+                // Remove existing listeners
+                const newButton = mobileMenuButton.cloneNode(true);
+                mobileMenuButton.parentNode.replaceChild(newButton, mobileMenuButton);
+                
+                const sidebar = document.querySelector('.md\\:flex.md\\:flex-shrink-0');
+                if (sidebar) {
+                    newButton.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        sidebar.classList.toggle('hidden');
+                    });
+                }
+            }
+            
+            // Mark as initialized
+            window.eventHandlersInitialized = true;
+            if (window.DEBUG) console.log("Navigation event handlers initialized");
+        }
+        
+        // Initialize when the DOM is ready
+        document.addEventListener('DOMContentLoaded', initializeEventHandlers);
+        
+        // Also reinitialize after AJAX navigation
+        window.addEventListener('popstate', function() {
+            if (window.DEBUG) console.log("Handling popstate event");
+            setTimeout(initializeEventHandlers, 100); // Small delay to ensure DOM is updated
+        });
+    </script>
+</body>
+</html> 

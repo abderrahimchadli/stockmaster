@@ -1,0 +1,19 @@
+{
+  "name": "stockmaster",
+  "version": "1.0.0",
+  "description": "StockMaster is a powerful inventory management system designed specifically for Shopify stores. It helps store owners track inventory levels, automate out-of-stock policies, and receive notifications about critical inventory events.",
+  "main": "index.js",
+  "scripts": {
+    "build": "tailwindcss -i ./static/src/input.css -o ./static/css/output.css --minify",
+    "watch": "tailwindcss -i ./static/src/input.css -o ./static/css/output.css --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^4.1.3"
+  }
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=StockMaster Shopify App Service
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/stockmaster
+Environment=PATH=/home/deploy/stockmaster/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/deploy/stockmaster/venv/bin/python3 /home/deploy/stockmaster/shopify_service.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stockmaster
+
+# Environment variables (uncomment and fill in as needed)
+# Environment=SHOPIFY_STORE_DOMAIN=your-store.myshopify.com
+# Environment=SERVER_PORT=8000
+
+[Install]
+WantedBy=multi-user.target 

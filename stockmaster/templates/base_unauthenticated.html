@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="shopify-api-key" content="{{ settings.SHOPIFY_CLIENT_ID }}">
+    <title>{% block title %}StockMaster{% endblock %}</title>
+    
+    <!-- External Libraries -->
+    <link rel="stylesheet" href="{{ STATIC_URL }}css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    {% block extra_css %}{% endblock %}
+    
+    <!-- Shopify App Bridge -->
+    <script src="https://unpkg.com/@shopify/app-bridge@3.1.0/umd/index.js"></script>
+    
+    <script>
+      // Wait for everything to load before initializing
+      window.addEventListener('load', function() {
+        try {
+          // Get URL params - handle both standard and hash-based params
+          const urlParams = new URLSearchParams(window.location.search);
+          const shop = urlParams.get('shop') || '';
+          const host = urlParams.get('host') || '';
+          
+          console.log("Shop param:", shop);
+          console.log("Host param:", host);
+          
+          // Only initialize App Bridge if we have shop
+          if (shop) {
+            const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
+            
+            if (!window.AppBridge && window['app-bridge']) {
+              window.AppBridge = window['app-bridge'];
+            }
+            
+            if (!window.AppBridge) {
+              console.error("AppBridge not loaded yet");
+              return;
+            }
+            
+            // Initialize the app
+            const app = window.AppBridge.default.createApp({
+              apiKey: apiKey,
+              host: host || shop,
+              forceRedirect: false
+            });
+            
+            window.app = app;
+            console.log("App Bridge initialized for shop:", shop);
+            
+            // Auto-populate shop field if present
+            const shopInput = document.getElementById('shop');
+            if (shopInput && shop) {
+              shopInput.value = shop;
+            }
+          } else {
+            console.log("Not running in a Shopify iframe or missing params");
+          }
+        } catch (error) {
+          console.error("Error initializing App Bridge:", error);
+        }
+      });
+    </script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="min-h-screen flex items-center justify-center">
+        {% block content %}{% endblock %} 
+    </div>
+    
+    {% block extra_js %}{% endblock %}
+</body>
+</html> 

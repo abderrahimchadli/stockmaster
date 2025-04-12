@@ -1,0 +1,83 @@
+{% extends "base_unauthenticated.html" %}
+
+{% block title %}Login - {% if app_name %}{{ app_name }}{% else %}StockMaster{% endif %}{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-md w-full space-y-8">
+    <div>
+      <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
+        {% if app_name %}{{ app_name }}{% else %}StockMaster{% endif %}
+      </h2>
+      <p class="mt-2 text-center text-sm text-gray-600">
+        Your Shopify Out-of-Stock Management Solution
+      </p>
+    </div>
+    
+    {% if messages %}
+    <div class="rounded-md bg-red-50 p-4 mb-4">
+      <div class="flex">
+        <div class="ml-3">
+          <h3 class="text-sm font-medium text-red-800">Error</h3>
+          <div class="mt-2 text-sm text-red-700">
+            <ul class="list-disc pl-5 space-y-1">
+            {% for message in messages %}
+              <li>{{ message }}</li>
+            {% endfor %}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    
+    <form class="mt-8 space-y-6" action="{% url 'accounts:login' %}" method="get" id="loginForm">
+      <div class="rounded-md shadow-sm -space-y-px">
+        <div>
+          <label for="shop" class="sr-only">Shop URL</label>
+          <input id="shop" name="shop" type="text" required class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm" placeholder="yourstore.myshopify.com">
+        </div>
+      </div>
+
+      <div>
+        <button type="submit" class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+          Connect to Shopify
+        </button>
+      </div>
+    </form>
+    
+    <div class="mt-8 text-center text-sm text-gray-600">
+      <p>{% if app_name %}{{ app_name }}{% else %}StockMaster{% endif %} helps you automate out-of-stock product management in your Shopify store.</p>
+      <p class="mt-2">No credit card required to start your free 14-day trial.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Auto-redirect if we have all Shopify params
+  (function() {
+    const params = new URLSearchParams(window.location.search);
+    const shop = params.get('shop');
+    const host = params.get('host');
+    
+    // If we have shop and host, we're in an embedded app context
+    if (shop && host) {
+      const loginForm = document.getElementById('loginForm');
+      if (loginForm) {
+        // Pre-fill the shop input
+        const shopInput = document.getElementById('shop');
+        if (shopInput) {
+          shopInput.value = shop;
+        }
+        
+        // Auto-submit the form after a short delay
+        setTimeout(function() {
+          loginForm.submit();
+        }, 500);
+      }
+    }
+  })();
+</script>
+{% endblock %}
