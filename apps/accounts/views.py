@@ -420,39 +420,195 @@ def landing_page(request):
     return redirect(auth_url)
 
 @csrf_exempt
-def callback(request):
-    """
-    OAuth callback from Shopify
-    """
-    # Get parameters from request
+def auth_callback(request):
+    """Handle the OAuth callback from Shopify."""
+    # Get the shop and code from query parameters
     shop = request.GET.get('shop')
     code = request.GET.get('code')
-    state = request.GET.get('state')
     
-    # Validate state to prevent CSRF
-    stored_state = request.session.get('shopify_auth_state')
-    stored_shop = request.session.get('shopify_shop')
+    if not shop:
+        logger.error("[Callback] Missing shop parameter")
+        return render(request, 'accounts/error.html', {'error': 'Missing shop parameter'})
     
-    if not state or state != stored_state or not shop or shop != stored_shop:
-        return HttpResponse("Invalid request", status=400)
+    if not code:
+        logger.error("[Callback] Missing code parameter")
+        return render(request, 'accounts/error.html', {'error': 'Missing authorization code'})
     
-    # Exchange code for access token
-    access_token = exchange_code_for_token(shop, code)
-    if not access_token:
-        return HttpResponse("Failed to get access token", status=400)
+    # Exchange the code for an access token
+    try:
+        data = {
+            'client_id': settings.SHOPIFY_CLIENT_ID,
+            'client_secret': settings.SHOPIFY_CLIENT_SECRET,
+            'code': code
+        }
+        response = requests.post(f"https://{shop}/admin/oauth/access_token", data=data)
+        if response.status_code != 200:
+            logger.error(f"[Callback] Failed to get access token. Response: {response.text}")
+            return render(request, 'accounts/error.html', {'error': 'Failed to get access token'})
+        
+        access_token = response.json().get('access_token')
+        if not access_token:
+            logger.error("[Callback] No access token in response")
+            return render(request, 'accounts/error.html', {'error': 'No access token received'})
+        
+        logger.info(f"[Callback] Successfully obtained access token for {shop}")
+        
+    except Exception as e:
+        logger.error(f"[Callback] Error exchanging code for token: {str(e)}", exc_info=True)
+        return render(request, 'accounts/error.html', {'error': 'Error obtaining access token'})
     
-    # Store the token in session
-    request.session['shopify_access_token'] = access_token
+    # Get shop details using the access token
+    try:
+        headers = {
+            'X-Shopify-Access-Token': access_token,
+            'Content-Type': 'application/json'
+        }
+        response = requests.get(f"https://{shop}/admin/api/{settings.SHOPIFY_API_VERSION}/shop.json", headers=headers)
+        if response.status_code != 200:
+            logger.error(f"[Callback] Failed to get shop details. Response: {response.text}")
+            return render(request, 'accounts/error.html', {'error': 'Failed to get shop details'})
+        
+        shop_data = response.json().get('shop', {})
+        shop_name = shop_data.get('name')
+        shop_email = shop_data.get('email')
+        
+        logger.info(f"[Callback] Got shop details for {shop_name} ({shop_email})")
+        
+    except Exception as e:
+        logger.error(f"[Callback] Error fetching shop details: {str(e)}", exc_info=True)
+        return render(request, 'accounts/error.html', {'error': 'Error fetching shop details'})
     
-    # Get shop details and store in database
-    shop_details = get_shop_details(shop, access_token)
-    if not shop_details:
-        return HttpResponse("Failed to get shop details", status=400)
+    # Save or update store in database
+    try:
+        store, created = ShopifyStore.objects.update_or_create(
+            shop_url=shop,
+            defaults={
+                'access_token': access_token,
+                'shop_name': shop_name,
+                'shop_email': shop_email,
+                'is_active': True,
+                'scopes': settings.SHOPIFY_API_SCOPES,
+                'last_access': timezone.now(),
+                'installed_at': timezone.now() if created else F('installed_at'),
+                'trial_ends_at': timezone.now() + datetime.timedelta(days=settings.TRIAL_DAYS) if created else None,
+                'sync_status': 'pending'
+            }
+        )
+        if store and store.id:
+            logger.info(f"[Callback][DB Save SUCCESS] {'Created' if created else 'Updated'} ShopifyStore record. ID: {store.id}, Shop: {store.shop_url}, Active: {store.is_active}, Token Saved: {bool(store.access_token)}")
+        else:
+            logger.error("[Callback][DB Save FAILED] update_or_create finished but store object or ID is invalid.")
+            return render(request, 'accounts/error.html', {'error': 'Error processing store information in database.'})
+            
+    except Exception as e:
+        logger.error(f"[Callback][DB Save EXCEPTION] Error saving store {shop} to database: {str(e)}", exc_info=True)
+        return render(request, 'accounts/error.html', {'error': 'Error processing store information in database.'})
     
-    # Save shop details and token to database (simplified for now)
+    # Store necessary info in session
+    request.session['shop'] = store.shop_url
+    request.session['store_id'] = store.id
+    request.session.pop('shopify_auth_state', None)
+    request.session.pop('shopify_shop', None)
+    
+    # Setup webhooks
+    try:
+        client = ShopifyClient(shop, access_token)
+        setup_webhooks(client, store)
+        logger.info(f"[Callback] Webhook setup completed for store ID: {store.id}")
+    except Exception as e:
+        logger.error(f"[Callback] Error setting up webhooks for store {store.id}: {str(e)}", exc_info=True)
+    
+    # Trigger initial data sync
+    try:
+        sync_store_data.delay(store.id)
+        store.sync_status = 'pending'
+        store.save(update_fields=['sync_status'])
+        logger.info(f"[Callback] Triggered background sync task for store ID: {store.id}")
+    except Exception as e:
+        logger.error(f"[Callback] Error triggering background sync for store {store.id}: {str(e)}", exc_info=True)
     
     # Redirect to app in Shopify Admin
-    return redirect(f"https://{shop}/admin/apps/{settings.SHOPIFY_CLIENT_ID}")
+    admin_url = f"https://{shop}/admin/apps/{settings.SHOPIFY_CLIENT_ID}"
+    logger.info(f"[Callback] Redirecting to app main page: {admin_url}")
+    return redirect(admin_url)
+
+def create_nonce():
+    """Generate a random nonce for OAuth state"""
+    return base64.b64encode(os.urandom(16)).decode('utf-8')
+
+def exchange_code_for_token(shop, code):
+    """Exchange authorization code for permanent access token"""
+    try:
+        data = {
+            'client_id': settings.SHOPIFY_CLIENT_ID,
+            'client_secret': settings.SHOPIFY_CLIENT_SECRET,
+            'code': code
+        }
+        response = requests.post(f"https://{shop}/admin/oauth/access_token", data=data)
+        if response.status_code == 200:
+            return response.json().get('access_token')
+        logger.error(f"Failed to get access token: {response.text}")
+        return None
+    except Exception as e:
+        logger.error(f"Error exchanging code for token: {str(e)}")
+        return None
+
+def get_shop_details(shop, access_token):
+    """Get shop details from Shopify"""
+    try:
+        headers = {
+            'X-Shopify-Access-Token': access_token,
+            'Content-Type': 'application/json'
+        }
+        response = requests.get(f"https://{shop}/admin/api/2023-10/shop.json", headers=headers)
+        if response.status_code == 200:
+            return response.json().get('shop')
+        logger.error(f"Failed to get shop details: {response.text}")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting shop details: {str(e)}")
+        return None
+
+@login_required
+def index(request):
+    """
+    Dashboard view (requires login)
+    """
+    return redirect('dashboard:index') 
+            logger.error("[Callback][DB Save FAILED] update_or_create finished but store object or ID is invalid.")
+            return render(request, 'accounts/error.html', {'error': 'Error processing store information in database.'})
+            
+    except Exception as e:
+        logger.error(f"[Callback][DB Save EXCEPTION] Error saving store {shop} to database: {str(e)}", exc_info=True)
+        return render(request, 'accounts/error.html', {'error': 'Error processing store information in database.'})
+    
+    # Store necessary info in session
+    request.session['shop'] = store.shop_url
+    request.session['store_id'] = store.id
+    request.session.pop('shopify_auth_state', None)
+    request.session.pop('shopify_shop', None)
+    
+    # Setup webhooks
+    try:
+        client = ShopifyClient(shop, access_token)
+        setup_webhooks(client, store)
+        logger.info(f"[Callback] Webhook setup completed for store ID: {store.id}")
+    except Exception as e:
+        logger.error(f"[Callback] Error setting up webhooks for store {store.id}: {str(e)}", exc_info=True)
+    
+    # Trigger initial data sync
+    try:
+        sync_store_data.delay(store.id)
+        store.sync_status = 'pending'
+        store.save(update_fields=['sync_status'])
+        logger.info(f"[Callback] Triggered background sync task for store ID: {store.id}")
+    except Exception as e:
+        logger.error(f"[Callback] Error triggering background sync for store {store.id}: {str(e)}", exc_info=True)
+    
+    # Redirect to app in Shopify Admin
+    admin_url = f"https://{shop}/admin/apps/{settings.SHOPIFY_CLIENT_ID}"
+    logger.info(f"[Callback] Redirecting to app main page: {admin_url}")
+    return redirect(admin_url)
 
 def create_nonce():
     """Generate a random nonce for OAuth state"""

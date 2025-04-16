@@ -32,25 +32,25 @@ def install_app(request):
     Initiates the Shopify OAuth process with a simple redirect.
     """
     shop = request.GET.get('shop')  # e.g. my-store.myshopify.com
-        if not shop:
-            return render(request, 'accounts/login.html')
-        
-        # Normalize shop URL
-        if not shop.endswith('.myshopify.com'):
-            shop = f"{shop}.myshopify.com"
-        
-        # Generate a state parameter to prevent CSRF
-        state = secrets.token_hex(16)
+    if not shop:
+        return render(request, 'accounts/login.html')
+    
+    # Normalize shop URL
+    if not shop.endswith('.myshopify.com'):
+        shop = f"{shop}.myshopify.com"
+    
+    # Generate a state parameter to prevent CSRF
+    state = secrets.token_hex(16)
     request.session['shopify_auth_state'] = state
     request.session['shopify_shop'] = shop
-        
+    
     # Build redirection URL with proper components
-        api_key = settings.SHOPIFY_CLIENT_ID
-        scopes = settings.SHOPIFY_API_SCOPES
+    api_key = settings.SHOPIFY_CLIENT_ID
+    scopes = settings.SHOPIFY_API_SCOPES
     
     # IMPORTANT: Use the exact callback URL registered in Shopify (with trailing slash)
-        redirect_uri = "https://cloud-549585597.onetsolutions.network/auth/callback/"
-        
+    redirect_uri = "https://cloud-549585597.onetsolutions.network/auth/callback/"
+    
     # Construct the install URL with URLEncoded redirect URI
     install_url = f"https://{shop}/admin/oauth/authorize?client_id={api_key}&scope={scopes}&redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}"
     
@@ -68,7 +68,7 @@ def auth_callback(request):
     # Get parameters from request
     code = request.GET.get('code')
     shop = request.GET.get('shop')
-        state = request.GET.get('state')
+    state = request.GET.get('state')
     hmac = request.GET.get('hmac')
     
     logger.info(f"[Callback] Received - Shop: {shop}, State: {state}, Code: {bool(code)}, HMAC: {bool(hmac)}")
@@ -82,8 +82,8 @@ def auth_callback(request):
     
     # 2. Verify HMAC
     if not hmac_is_valid(request.GET):
-         logger.error(f"[Callback] HMAC verification failed.")
-         return render(request, 'accounts/error.html', {'error': 'HMAC verification failed'})
+        logger.error(f"[Callback] HMAC verification failed.")
+        return render(request, 'accounts/error.html', {'error': 'HMAC verification failed'})
     logger.info("[Callback] HMAC verification successful.")
 
     # 3. Exchange code for access token
@@ -138,26 +138,23 @@ def auth_callback(request):
     request.session.pop('shopify_shop', None)
     logger.info(f"[Callback] Session updated for store ID: {store.id}")
 
-    # 7. Setup Webhooks (Sync, similar to example)
-    # ===> TEMPORARILY COMMENTED OUT <===
-    # try:
-    #     client = ShopifyClient(shop, access_token)
-    #     setup_webhooks(client, store)
-    #     logger.info(f"[Callback] Webhook setup attempted for store ID: {store.id}")
-    # except Exception as e:
-    #     logger.error(f"[Callback] Error setting up webhooks for store {store.id}: {str(e)}", exc_info=True)
-    logger.info("[Callback] Webhook setup TEMPORARILY SKIPPED.")
+    # 7. Setup Webhooks
+    try:
+        client = ShopifyClient(shop, access_token)
+        setup_webhooks(client, store)
+        logger.info(f"[Callback] Webhook setup completed for store ID: {store.id}")
+    except Exception as e:
+        logger.error(f"[Callback] Error setting up webhooks for store {store.id}: {str(e)}", exc_info=True)
+        # Don't fail the whole callback for webhook setup issues
 
     # 8. Trigger Initial Data Sync (Async)
-    # ===> TEMPORARILY COMMENTED OUT <===
-    # try:
-    #     sync_store_data.delay(store.id)
-    #     # store.sync_status = 'pending' # Already set in defaults
-    #     # store.save(update_fields=['sync_status'])
-    #     logger.info(f"[Callback] Triggered background sync task for store ID: {store.id}")
-    # except Exception as e:
-    #     logger.error(f"[Callback] Error triggering background sync for store {store.id}: {str(e)}", exc_info=True)
-    logger.info("[Callback] Background sync trigger TEMPORARILY SKIPPED.")
+    try:
+        sync_store_data.delay(store.id)
+        store.sync_status = 'pending'
+        store.save(update_fields=['sync_status'])
+        logger.info(f"[Callback] Triggered background sync task for store ID: {store.id}")
+    except Exception as e:
+        logger.error(f"[Callback] Error triggering background sync for store {store.id}: {str(e)}", exc_info=True)
 
     # 9. Redirect to app in Shopify Admin
     admin_url = f"https://{shop}/admin/apps/{settings.SHOPIFY_CLIENT_ID}"
@@ -209,7 +206,7 @@ def hmac_is_valid(query_params):
         
         is_valid = hmac.compare_digest(digest, hmac_value)
         if not is_valid:
-             logger.warning(f"[HMAC] Mismatch. Computed: {digest}, Received: {hmac_value}")
+            logger.warning(f"[HMAC] Mismatch. Computed: {digest}, Received: {hmac_value}")
         return is_valid
     except Exception as e:
         logger.error(f"[HMAC] Error during HMAC calculation: {str(e)}", exc_info=True)
@@ -229,8 +226,8 @@ def exchange_code_for_token(shop, code):
         data = response.json()
         access_token = data.get('access_token')
         if not access_token:
-             logger.error(f"[Token Exchange] Access token not found in response: {data}")
-             return None
+            logger.error(f"[Token Exchange] Access token not found in response: {data}")
+            return None
         return access_token
     except requests.exceptions.RequestException as e:
         logger.error(f"[Token Exchange] Error: {str(e)}")
@@ -287,7 +284,7 @@ def setup_webhooks(client, store):
             else:
                 logger.info(f"[Webhooks] Webhook for topic {topic} already exists.")
         
-        except Exception as e:
+    except Exception as e:
         logger.error(f"[Webhooks] Error during setup: {str(e)}", exc_info=True)
         # Don't necessarily fail the whole callback for this
 
@@ -437,4 +434,47 @@ def index(request):
     """
     Dashboard view (requires login)
     """
-    return redirect('dashboard:index') 
+    return redirect('dashboard:index')
+
+class LoginView(View):
+    """
+    View to start the Shopify OAuth flow.
+    """
+    def get(self, request):
+        # If shop isn't provided, show login form
+        shop = request.GET.get('shop')
+        if not shop:
+            return render(request, 'accounts/login.html')
+        
+        # Normalize shop URL
+        if not shop.endswith('.myshopify.com'):
+            shop = f"{shop}.myshopify.com"
+        
+        # Check if we already have a token for this shop
+        try:
+            store = ShopifyStore.objects.get(shop_url=shop, is_active=True)
+            if store.access_token:
+                # Store exists and has a token, update session
+                request.session['shop'] = shop
+                store.update_last_access()
+                return redirect('dashboard:index')
+        except ShopifyStore.DoesNotExist:
+            # Store doesn't exist, will create during callback
+            pass
+        
+        # Generate a state parameter to prevent CSRF
+        state = secrets.token_hex(16)
+        request.session['state'] = state
+        
+        # Build the redirect URL
+        redirect_uri = request.build_absolute_uri(reverse('accounts:callback'))
+        
+        # Generate the install URL
+        install_url = ShopifyClient.get_install_url(shop, redirect_uri, state)
+        
+        # Redirect to Shopify for authorization
+        return HttpResponseRedirect(install_url)
+
+"""
+Closing any potentially unclosed docstring
+""" 

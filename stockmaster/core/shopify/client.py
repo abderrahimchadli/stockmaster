@@ -106,7 +106,7 @@ class ShopifyClient:
         """
         self.shop_url = shop_url
         self.access_token = access_token
-        self.base_url = f"https://{shop_url}/admin/api/2024-01"  # Use latest stable API version
+        self.base_url = f"https://{shop_url}/admin/api/{settings.SHOPIFY_API_VERSION}"  # Use version from settings
     
     def _request(self, method, endpoint, data=None, params=None):
         """
@@ -218,7 +218,7 @@ class ShopifyClient:
     # GraphQL API method
     def graphql(self, query, variables=None):
         """Execute a GraphQL query"""
-        url = f"https://{self.shop_url}/admin/api/2024-01/graphql.json"
+        url = f"https://{self.shop_url}/admin/api/{settings.SHOPIFY_API_VERSION}/graphql.json"
         headers = {
             'X-Shopify-Access-Token': self.access_token,
             'Content-Type': 'application/json'

@@ -1,0 +1,30 @@
+# Environment variables
+.env
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment directories
+venv/
+env/
+.venv/
+# Assuming bin might be a virtual env, adjust if not
+bin/ 
+
+# Backup directory
+backup/
+
+# Editor-specific
+.cursor/
+
+# Database files (if using SQLite temporarily)
+db.sqlite3
+*.sqlite3 
+
+# Node dependencies
+node_modules/
+stockmaster/static/node_modules/ 

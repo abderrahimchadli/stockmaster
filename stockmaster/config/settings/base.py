@@ -178,7 +178,7 @@ CELERY_TIMEZONE = TIME_ZONE
 SHOPIFY_CLIENT_ID = os.getenv('SHOPIFY_CLIENT_ID')
 SHOPIFY_CLIENT_SECRET = os.getenv('SHOPIFY_CLIENT_SECRET')
 SHOPIFY_API_SCOPES = os.getenv('SHOPIFY_API_SCOPES', 'read_products,write_products,read_inventory,write_inventory')
-SHOPIFY_API_VERSION = '2024-01'  # Use the latest stable API version
+SHOPIFY_API_VERSION = '2023-04'  # Latest stable version supported by ShopifyAPI package
 APP_URL = os.getenv('APP_URL', 'https://cloud-549585597.onetsolutions.network')
 DOMAIN = os.getenv('DOMAIN', 'cloud-549585597.onetsolutions.network')
 
